@@ -354,7 +354,7 @@ func parseToAST(tokens []Token) (map[string]interface{}, []string) {
 	// AST básico con estructura simple
 	statements := make([]map[string]interface{}, 0)
 	
-	// Análisis básico sin recursión compleja
+	// Análisis básico con verificación de sintaxis
 	for i := 0; i < len(tokens); i++ {
 		token := tokens[i]
 		
@@ -375,7 +375,18 @@ func parseToAST(tokens []Token) (map[string]interface{}, []string) {
 				}
 				statements = append(statements, stmt)
 				
-			case "if", "for", "while":
+			case "for":
+				stmt := map[string]interface{}{
+					"type": "ForStatement",
+					"line": token.Line,
+				}
+				statements = append(statements, stmt)
+				
+				// Validar sintaxis del bucle for
+				forErrors := validateForLoopSyntax(tokens, i)
+				errors = append(errors, forErrors...)
+				
+			case "if", "while":
 				stmt := map[string]interface{}{
 					"type": token.Value + "Statement",
 					"line": token.Line,
@@ -389,6 +400,81 @@ func parseToAST(tokens []Token) (map[string]interface{}, []string) {
 	ast["body"] = statements
 	
 	return ast, errors
+}
+
+// Validar sintaxis específica del bucle for
+func validateForLoopSyntax(tokens []Token, forIndex int) []string {
+	var errors []string
+	
+	// Buscar el paréntesis de apertura
+	parenStart := -1
+	for i := forIndex + 1; i < len(tokens) && i < forIndex + 5; i++ {
+		if tokens[i].Type == "LPAREN" {
+			parenStart = i
+			break
+		}
+	}
+	
+	if parenStart == -1 {
+		errors = append(errors, fmt.Sprintf("Missing opening parenthesis after 'for' at line %d", tokens[forIndex].Line))
+		return errors
+	}
+	
+	// Buscar el paréntesis de cierre
+	parenEnd := -1
+	for i := parenStart + 1; i < len(tokens); i++ {
+		if tokens[i].Type == "RPAREN" {
+			parenEnd = i
+			break
+		}
+	}
+	
+	if parenEnd == -1 {
+		errors = append(errors, fmt.Sprintf("Missing closing parenthesis for 'for' loop at line %d", tokens[forIndex].Line))
+		return errors
+	}
+	
+	// Analizar el contenido entre paréntesis
+	forContent := tokens[parenStart+1 : parenEnd]
+	
+	// Contar puntos y comas (debería haber exactamente 2)
+	semicolonCount := 0
+	semicolonPositions := []int{}
+	
+	for i, token := range forContent {
+		if token.Type == "SEMICOLON" {
+			semicolonCount++
+			semicolonPositions = append(semicolonPositions, i)
+		}
+	}
+	
+	if semicolonCount != 2 {
+		if semicolonCount < 2 {
+			errors = append(errors, fmt.Sprintf("Missing semicolon in for loop at line %d (expected 2, found %d)", tokens[forIndex].Line, semicolonCount))
+		} else {
+			errors = append(errors, fmt.Sprintf("Too many semicolons in for loop at line %d (expected 2, found %d)", tokens[forIndex].Line, semicolonCount))
+		}
+	}
+	
+	// Verificar que cada sección tenga contenido
+	if len(semicolonPositions) >= 2 {
+		// Verificar primera sección (init)
+		if semicolonPositions[0] == 0 {
+			errors = append(errors, fmt.Sprintf("Empty initialization in for loop at line %d", tokens[forIndex].Line))
+		}
+		
+		// Verificar segunda sección (condition)
+		if len(semicolonPositions) >= 2 && semicolonPositions[1] == semicolonPositions[0]+1 {
+			errors = append(errors, fmt.Sprintf("Empty condition in for loop at line %d", tokens[forIndex].Line))
+		}
+		
+		// Verificar tercera sección (update)
+		if len(semicolonPositions) >= 2 && semicolonPositions[1] == len(forContent)-1 {
+			errors = append(errors, fmt.Sprintf("Empty update expression in for loop at line %d", tokens[forIndex].Line))
+		}
+	}
+	
+	return errors
 }
 
 // Análisis semántico simplificado
@@ -438,14 +524,44 @@ func performSemanticAnalysis(tokens []Token) []string {
 		if token.Type == "KEYWORD" && token.Value == "for" {
 			// Buscar declaraciones dentro del for (let i = ...)
 			j := i + 1
-			for j < len(tokens) && tokens[j].Type != "RPAREN" {
-				if tokens[j].Type == "KEYWORD" && 
-				   (tokens[j].Value == "let" || tokens[j].Value == "const" || tokens[j].Value == "var") {
-					if j+1 < len(tokens) && tokens[j+1].Type == "IDENTIFIER" {
-						declaredVars[tokens[j+1].Value] = true
+			parenStart := -1
+			parenEnd := -1
+			
+			// Encontrar los paréntesis del for
+			for k := j; k < len(tokens) && k < j + 10; k++ {
+				if tokens[k].Type == "LPAREN" && parenStart == -1 {
+					parenStart = k
+				} else if tokens[k].Type == "RPAREN" && parenStart != -1 {
+					parenEnd = k
+					break
+				}
+			}
+			
+			if parenStart != -1 && parenEnd != -1 {
+				// Analizar contenido del for
+				hasDeclaration := false
+				for k := parenStart + 1; k < parenEnd; k++ {
+					if tokens[k].Type == "KEYWORD" && 
+					   (tokens[k].Value == "let" || tokens[k].Value == "const" || tokens[k].Value == "var") {
+						hasDeclaration = true
+						if k+1 < len(tokens) && tokens[k+1].Type == "IDENTIFIER" {
+							declaredVars[tokens[k+1].Value] = true
+						}
 					}
 				}
-				j++
+				
+				// Si no hay declaración, buscar variables que se usan sin declarar
+				if !hasDeclaration {
+					for k := parenStart + 1; k < parenEnd; k++ {
+						if tokens[k].Type == "IDENTIFIER" && 
+						   !isKeyword(tokens[k].Value) && 
+						   !isBuiltIn(tokens[k].Value) &&
+						   tokens[k].Type == "IDENTIFIER" {
+							// Esta es una variable usada en el for sin declarar
+							// La marcaremos como error más tarde en el análisis semántico
+						}
+					}
+				}
 			}
 		}
 	}
@@ -485,6 +601,58 @@ func performSemanticAnalysis(tokens []Token) []string {
 		// Verificar require()
 		if tokens[i].Value == "require" && i+1 < len(tokens) && tokens[i+1].Type != "LPAREN" {
 			errors = append(errors, fmt.Sprintf("require must be followed by parentheses at line %d", tokens[i].Line))
+		}
+	}
+	
+	// Verificar bucles for sin declaración de variable
+	errors = append(errors, validateForLoopVariables(tokens)...)
+	
+	return errors
+}
+
+// Validar variables en bucles for
+func validateForLoopVariables(tokens []Token) []string {
+	var errors []string
+	
+	for i := 0; i < len(tokens); i++ {
+		if tokens[i].Type == "KEYWORD" && tokens[i].Value == "for" {
+			// Buscar paréntesis
+			parenStart := -1
+			parenEnd := -1
+			
+			for j := i + 1; j < len(tokens) && j < i + 10; j++ {
+				if tokens[j].Type == "LPAREN" && parenStart == -1 {
+					parenStart = j
+				} else if tokens[j].Type == "RPAREN" && parenStart != -1 {
+					parenEnd = j
+					break
+				}
+			}
+			
+			if parenStart != -1 && parenEnd != -1 {
+				// Verificar si hay declaración de variable
+				hasVarDeclaration := false
+				firstIdentifier := ""
+				
+				for j := parenStart + 1; j < parenEnd; j++ {
+					if tokens[j].Type == "KEYWORD" && 
+					   (tokens[j].Value == "let" || tokens[j].Value == "const" || tokens[j].Value == "var") {
+						hasVarDeclaration = true
+						break
+					}
+					
+					// Capturar el primer identificador
+					if tokens[j].Type == "IDENTIFIER" && firstIdentifier == "" &&
+					   !isKeyword(tokens[j].Value) && !isBuiltIn(tokens[j].Value) {
+						firstIdentifier = tokens[j].Value
+					}
+				}
+				
+				// Si no hay declaración pero hay un identificador, es un error
+				if !hasVarDeclaration && firstIdentifier != "" {
+					errors = append(errors, fmt.Sprintf("Variable '%s' in for loop should be declared with let, const, or var at line %d", firstIdentifier, tokens[i].Line))
+				}
+			}
 		}
 	}
 	
