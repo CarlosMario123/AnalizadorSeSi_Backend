@@ -1,0 +1,17 @@
+// FOR loop válido
+for (let i = 0; i < 10; i++) {
+    console.log(i);
+}
+
+// WHILE loop válido  
+let counter = 0;
+while (counter < 5) {
+    counter++;
+}
+
+// IF statement válido
+if (x > 0) {
+    console.log("Positivo");
+} else {
+    console.log("No positivo");
+}

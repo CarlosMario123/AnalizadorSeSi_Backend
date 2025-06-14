@@ -1,0 +1,14 @@
+// Paréntesis no balanceados
+if (x > 0 {
+    console.log("Error");
+}
+
+// For loop incompleto
+for (let i = 0; i < 10;) {
+    console.log(i);
+}
+
+// While sin condición
+while () {
+    console.log("Error");
+}
